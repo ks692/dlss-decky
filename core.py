@@ -1,6 +1,7 @@
 """Independent MIT-licensed installation manager. No upstream code is vendored."""
 from __future__ import annotations
 import contextlib
+import configparser
 import fcntl
 import hashlib
 import io
@@ -21,6 +22,46 @@ RELEASE_SHA = "d79e849444e0ea8928c0b8df22ec21368ac08ec038417c087a3d2df7a6722119"
 DLL = "amd_fidelityfx_dx12.dll"
 UPSCALER = "amd_fidelityfx_upscaler_dx12.dll"
 NETWORK = ("helixsr_weights.bin", "helixsr_kernels.pak")
+RENDERER_LOG = "helixsr.log"
+SETTINGS_FILE = "helixsr.ini"
+
+
+def _plugin_version() -> str:
+    try:
+        return json.loads((Path(__file__).parent / "package.json").read_text())["version"]
+    except (OSError, ValueError, KeyError):
+        return "0.0.0"
+
+
+PLUGIN_VERSION = _plugin_version()
+
+# User-facing subset of helixsr.ini. Unknown keys in an existing file are preserved.
+SETTINGS_SCHEMA = (
+    {"section": "Sharpening", "key": "Mode", "label": "Sharpening mode", "kind": "choice",
+     "options": ["off", "game", "override"], "default": "off",
+     "help": "off: no sharpening. game: follow the game's FSR sharpness, falling back to Sharpness. override: always use Sharpness."},
+    {"section": "Sharpening", "key": "Sharpness", "label": "Sharpness", "kind": "float",
+     "min": 0.0, "max": 1.0, "default": 0.3,
+     "help": "Strength on the FidelityFX scale, 0 is none and 1 is strongest."},
+    {"section": "ModelE", "key": "Network", "label": "Reconstruction network", "kind": "choice",
+     "options": ["auto", "nvidia", "main", "ultraperformance"], "default": "auto",
+     "help": "auto: the main network at every ratio. nvidia: NVIDIA DLSS behavior in Ultra Performance."},
+    {"section": "Upscaling", "key": "NetworkResolution", "label": "Network resolution", "kind": "choice",
+     "options": ["auto", "fast", "full"], "default": "auto",
+     "help": "auto: balanced default. fast: lower internal resolution, a little softer. full: always full output size."},
+)
+
+# Top-level game-directory markers for anti-cheat products that commonly ban
+# modified or injected DLLs. Detection is best-effort and cannot cover every game.
+ANTICHEAT = {
+    "easyanticheat": "Easy Anti-Cheat",
+    "battleye": "BattlEye",
+    "xigncode3": "XIGNCODE3",
+    "nprotect": "nProtect GameGuard",
+    "gameguard": "nProtect GameGuard",
+    "vgk.sys": "Riot Vanguard",
+    "faceit.sys": "FACEIT Anti-Cheat",
+}
 
 class ManagerError(Exception):
     pass
@@ -118,6 +159,46 @@ def walk_files(root: Path):
         yield here, dirs, files
 
 
+def read_tail(path: Path, lines: int = 200, max_bytes: int = 256 * 1024) -> str:
+    """Last lines of a log file; empty string when there is nothing safe to read."""
+    try:
+        if not path.is_file() or path.is_symlink():
+            return ""
+        size = path.stat().st_size
+        with path.open("rb") as f:
+            f.seek(max(0, size - max_bytes))
+            text = f.read().decode(errors="replace")
+    except OSError:
+        return ""
+    return "\n".join(text.splitlines()[-lines:])
+
+
+def detect_anticheat(root: Path) -> list[str]:
+    """Known anti-cheat products shipped at the top level of the game directory."""
+    try:
+        names = {entry.name.lower() for entry in root.iterdir()}
+    except OSError:
+        return []
+    return sorted({label for marker, label in ANTICHEAT.items() if marker in names})
+
+
+def running_processes(root: Path) -> list[str]:
+    """Process names whose executable or working directory is inside the game root."""
+    root = root.resolve()
+    found = set()
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            for link in ("exe", "cwd"):
+                target = os.readlink(f"/proc/{pid}/{link}")
+                if target and Path(target).is_relative_to(root):
+                    with open(f"/proc/{pid}/comm", encoding="utf-8", errors="replace") as f:
+                        found.add(f.read().strip() or pid)
+                    break
+        except (OSError, RuntimeError):
+            continue
+    return sorted(found)
+
+
 class Manager:
     def __init__(self, home: Path, state: Path):
         self.home, self.state = home.resolve(), state.resolve()
@@ -146,6 +227,119 @@ class Manager:
             return all(sha(self.runtime / n) == expected[n] for n in (DLL,) + NETWORK)
         except (OSError, ValueError, KeyError, ManagerError):
             return False
+
+    def versions(self) -> dict:
+        return {"plugin": PLUGIN_VERSION, "helixsr": VERSION, "ready": self.ready()}
+
+    def setup_log_text(self, lines: int = 200) -> str:
+        return read_tail(self.state / "setup.log", lines)
+
+    def game_log_text(self, key: str, lines: int = 200) -> str:
+        game = self.selected(key)
+        return read_tail(Path(game["root"]) / RENDERER_LOG, lines)
+
+    def is_running(self, key: str) -> dict:
+        game = self.selected(key)
+        processes = running_processes(Path(game["root"]))
+        return {"running": bool(processes), "processes": processes[:5]}
+
+    def _settings_dirs(self, game: dict) -> list[Path]:
+        root = Path(game["root"])
+        dirs = []
+        for target in game["targets"]:
+            parent = within(root, Path(target)).parent
+            if parent not in dirs:
+                dirs.append(parent)
+        return dirs
+
+    @staticmethod
+    def _read_ini(path: Path) -> dict | None:
+        try:
+            if not path.is_file() or path.is_symlink():
+                return None
+        except OSError:
+            return None
+        parser = configparser.ConfigParser()
+        parser.optionxform = str
+        try:
+            parser.read(path, encoding="utf-8")
+        except (OSError, configparser.Error):
+            return None
+        return {section: dict(parser.items(section)) for section in parser.sections()}
+
+    @staticmethod
+    def _coerce(item: dict, raw: str):
+        text = raw.strip()
+        if item["kind"] == "choice":
+            lowered = text.lower()
+            return lowered if lowered in item["options"] else item["default"]
+        try:
+            value = float(text)
+        except ValueError:
+            return item["default"]
+        return min(item["max"], max(item["min"], value))
+
+    def get_settings(self, key: str) -> dict:
+        game = self.selected(key)
+        values: dict[str, dict[str, object]] = {}
+        for item in SETTINGS_SCHEMA:
+            values.setdefault(item["section"], {})[item["key"]] = item["default"]
+        customized = False
+        for directory in self._settings_dirs(game):
+            data = self._read_ini(directory / SETTINGS_FILE)
+            if not data:
+                continue
+            customized = True
+            for item in SETTINGS_SCHEMA:
+                raw = data.get(item["section"], {}).get(item["key"])
+                if raw is not None:
+                    values[item["section"]][item["key"]] = self._coerce(item, raw)
+        return {"schema": [dict(item) for item in SETTINGS_SCHEMA],
+                "values": values, "customized": customized}
+
+    def _validate_settings(self, values) -> dict[tuple[str, str], object]:
+        if not isinstance(values, dict):
+            raise ManagerError("Settings must be a section-to-key mapping")
+        known = {(item["section"], item["key"]): item for item in SETTINGS_SCHEMA}
+        normalized = {}
+        for section, entries in values.items():
+            if not isinstance(entries, dict):
+                raise ManagerError(f"Invalid settings for [{section}]")
+            for name, raw in entries.items():
+                item = known.get((section, name))
+                if item is None:
+                    raise ManagerError(f"Unknown setting [{section}] {name}")
+                normalized[(section, name)] = self._coerce(item, str(raw))
+        if not normalized:
+            raise ManagerError("No settings to save")
+        return normalized
+
+    def set_settings(self, key: str, values: dict) -> str:
+        with self.locked():
+            game = self.selected(key)
+            if not game["installed"]:
+                raise ManagerError("Install HelixSR for this game before changing its settings")
+            self._require_closed(game, "changing HelixSR settings")
+            normalized = self._validate_settings(values)
+            root = Path(game["root"])
+            for directory in self._settings_dirs(game):
+                path = within(root, directory / SETTINGS_FILE)
+                parser = configparser.ConfigParser()
+                parser.optionxform = str
+                if path.exists() and not path.is_symlink():
+                    try:
+                        parser.read(path, encoding="utf-8")
+                    except (OSError, configparser.Error) as exc:
+                        raise ManagerError(f"Could not read existing settings: {exc}")
+                for (section, name), value in normalized.items():
+                    if not parser.has_section(section):
+                        parser.add_section(section)
+                    text = f"{value:.3g}" if isinstance(value, float) else str(value)
+                    parser.set(section, name, text)
+                buffer = io.StringIO()
+                parser.write(buffer)
+                atomic(path, buffer.getvalue().encode())
+            return "HelixSR settings saved. They apply the next time the game launches."
 
     def download_release(self, cancelled: threading.Event) -> None:
         """Called under the operation lock; only executes a pinned official archive."""
@@ -212,9 +406,16 @@ class Manager:
                     targets = sorted(p for p in dlls if p.name.lower() == UPSCALER) or sorted(dlls)
                     key = hashlib.sha256(str(root).encode()).hexdigest()[:24]
                     record = self.state / "transactions" / key / "manifest.json"
+                    installed_version = None
+                    if record.exists():
+                        try:
+                            installed_version = json.loads(record.read_text()).get("helixsr_version")
+                        except (OSError, ValueError):
+                            installed_version = None
                     if targets or record.exists():
                         games.append({"id": key, "appid": appid, "name": meta.get("name", dirname),
-                                      "root": str(root), "targets": [str(p) for p in targets], "installed": record.exists()})
+                                      "root": str(root), "targets": [str(p) for p in targets], "installed": record.exists(),
+                                      "installed_version": installed_version})
                 except (OSError, ValueError, KeyError):
                     continue
         return sorted(games, key=lambda g: g["name"].lower())
@@ -227,6 +428,12 @@ class Manager:
                 return game
         raise ManagerError("Game not found. Rescan after mounting your Steam library.")
 
+    def _require_closed(self, game: dict, action: str) -> None:
+        processes = running_processes(Path(game["root"]))
+        if processes:
+            names = ", ".join(processes[:3])
+            raise ManagerError(f"Close the game before {action} (running: {names}).")
+
     def install(self, key: str) -> str:
         with self.locked():
             game = self.selected(key)
@@ -235,6 +442,13 @@ class Manager:
             if not self.ready():
                 raise ManagerError("Set up HelixSR first")
             root = Path(game["root"])
+            self._require_closed(game, "installing HelixSR")
+            anticheat = detect_anticheat(root)
+            if anticheat:
+                raise ManagerError(
+                    "Anti-cheat detected (" + ", ".join(anticheat) + "). "
+                    "Modified DLLs risk an account ban, so installation is blocked. "
+                    "Detection cannot cover every game; check the game's policy before modding.")
             changes = {}
             for target_text in game["targets"]:
                 target = within(root, Path(target_text))
@@ -266,7 +480,7 @@ class Manager:
             if old is not None:
                 shutil.copy2(path, transaction / backup)
             entries.append({"path": str(path.relative_to(root)), "before": old, "after": hashlib.sha256(data).hexdigest(), "backup": backup})
-        record = {"root": str(root), "game": game["name"], "phase": "applying", "files": entries}
+        record = {"root": str(root), "game": game["name"], "helixsr_version": VERSION, "phase": "applying", "files": entries}
         journal = transaction / "manifest.json"
         write_json(journal, record)
         try:
@@ -289,6 +503,7 @@ class Manager:
             record = json.loads(journal.read_text())
             if record["root"] != game["root"]:
                 raise ManagerError("Game location changed; refusing to restore into a different folder")
+            self._require_closed(game, "restoring original files")
             self._restore(transaction, record)
             return "Original game files restored."
 

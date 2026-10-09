@@ -19,7 +19,7 @@ class Plugin:
         self.process = None
         self.task = None
         self.cancelled = threading.Event()
-        self.setup_log = self.manager.state / "setup.log"
+        self.setup_log_path = self.manager.state / "setup.log"
         self.guard = asyncio.Lock()
         self.phase = "idle"
         self.message = ""
@@ -29,6 +29,25 @@ class Plugin:
     async def status(self):
         return {"ready": self.ready, "busy": self.guard.locked() or self._setting_up(),
                 "setting_up": self._setting_up(), "phase": self.phase, "message": self.message}
+
+    async def versions(self):
+        return await asyncio.to_thread(self.manager.versions)
+
+    async def setup_log(self, lines: int = 200):
+        return await asyncio.to_thread(self.manager.setup_log_text, max(1, min(lines, 1000)))
+
+    async def game_log(self, key: str, lines: int = 200):
+        return await asyncio.to_thread(self.manager.game_log_text, key, max(1, min(lines, 1000)))
+
+    async def game_running(self, key: str):
+        return await asyncio.to_thread(self.manager.is_running, key)
+
+    async def get_settings(self, key: str):
+        return await asyncio.to_thread(self.manager.get_settings, key)
+
+    async def set_settings(self, key: str, values: dict):
+        async with self.guard:
+            return await asyncio.to_thread(self.manager.set_settings, key, values)
 
     def _setting_up(self):
         return self.task is not None and not self.task.done()
@@ -66,7 +85,7 @@ class Plugin:
                         env["LD_LIBRARY_PATH"] = env["LD_LIBRARY_PATH_ORIG"]
                     else:
                         env.pop("LD_LIBRARY_PATH", None)
-                    with self.setup_log.open("wb") as log:
+                    with self.setup_log_path.open("wb") as log:
                         self.process = await asyncio.create_subprocess_exec(
                             "bash", str(self.manager.runtime / "helixsr-setup.sh"), "--yes",
                             cwd=self.manager.runtime, env=env, stdout=log, stderr=asyncio.subprocess.STDOUT,
@@ -89,10 +108,10 @@ class Plugin:
                 self.process = None
 
     def _setup_error(self):
-        if not self.setup_log.exists():
+        if not self.setup_log_path.exists():
             return ""
-        with self.setup_log.open("rb") as f:
-            f.seek(max(0, self.setup_log.stat().st_size - 8192))
+        with self.setup_log_path.open("rb") as f:
+            f.seek(max(0, self.setup_log_path.stat().st_size - 8192))
             lines = f.read().decode(errors="replace").splitlines()
         for line in reversed(lines):
             if "error:" in line.lower() or "failed" in line.lower() or line.startswith("no "):

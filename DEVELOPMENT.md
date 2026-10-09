@@ -4,13 +4,21 @@
 
 | File | Responsibility |
 | --- | --- |
-| `src/index.tsx` | Decky interface: setup, game selection, install, restore |
+| `src/index.tsx` | Decky interface: setup, game selection, install, restore, settings, diagnostics |
 | `main.py` | Async Decky RPCs and cancellable setup process |
-| `core.py` | Steam discovery, pinned download, transactional file changes |
+| `core.py` | Steam discovery, pinned download, transactional file changes, settings, safety checks |
 | `tests/` | Temporary-library tests and mocked Decky lifecycle tests |
 | `scripts/package.py` | Deterministic installable ZIP, source ZIP, and SHA-256 sums |
 
 The UI calls Python with a discovered game ID, not arbitrary filesystem paths. The backend resolves that ID again before each operation. Setup and game modifications share an operation lock. The plugin runs as the normal Deck user and does not request Decky's root flag.
+
+## Safety checks and settings
+
+- Install and restore refuse to run while any process has its executable or working directory inside the game root (`Manager._require_closed`, via `/proc`).
+- Install is blocked when top-level game-directory names match `core.ANTICHEAT` (Easy Anti-Cheat, BattlEye, XIGNCODE3, nProtect/GameGuard, Vanguard/FACEIT drivers). Detection is best-effort.
+- Per-game `helixsr.ini` settings are managed through `Manager.get_settings` / `set_settings` against `core.SETTINGS_SCHEMA` (sharpening mode/strength, reconstruction network, network resolution). Unknown keys and sections in an existing file are preserved; the game must be installed and closed to save.
+- Diagnostics RPCs: `versions` (plugin and HelixSR versions, setup readiness), `setup_log` / `game_log` (tailed logs), `game_running` (process check for one game).
+- The install manifest records the HelixSR version used, surfaced per game as `installed_version`.
 
 Setup downloads the complete official HelixSR archive, retaining its licenses and notices, and invokes `bash helixsr-setup.sh --yes` only after in-plugin consent. `HELIXSR_FORCE_PORTABLE=1` forces local dependencies. Both shell and child processes run in a separate process group for cancellation. We do not use `sys.executable` as a Python interpreter because Decky can be packaged with PyInstaller.
 
