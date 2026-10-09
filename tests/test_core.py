@@ -135,6 +135,31 @@ class ManagerTests(unittest.TestCase):
         with self.assertRaisesRegex(ManagerError, "Symbolic links"):
             self.manager.restore(self.key)
 
+    def test_config_libraryfolders_vdf_is_also_scanned(self):
+        sd = self.base / "SD Card"
+        sdroot = sd / "steamapps/common/SD Game"
+        sdroot.mkdir(parents=True)
+        (sdroot / DLL).write_bytes(b"original SD DLL")
+        (sd / "steamapps/appmanifest_43.acf").write_text('"appid" "43" "name" "SD Game" "installdir" "SD Game"')
+        (self.steam / "config").mkdir()
+        (self.steam / "config/libraryfolders.vdf").write_text('"libraryfolders" { "1" { "path" "' + str(sd) + '" }}')
+        self.assertEqual([g["name"] for g in self.manager.scan()], ["SD Game", "Test Game"])
+
+    def test_running_game_ids(self):
+        with patch.object(core, "process_roots", return_value={self.root}):
+            self.assertEqual(self.manager.running_game_ids(), [self.key])
+        with patch.object(core, "process_roots", return_value=set()):
+            self.assertEqual(self.manager.running_game_ids(), [])
+
+    def test_process_roots_includes_cwd(self):
+        import os as _os
+        before = _os.getcwd()
+        try:
+            _os.chdir(self.root)
+            self.assertIn(self.root, core.process_roots())
+        finally:
+            _os.chdir(before)
+
     def test_sd_library_and_alias_are_deduplicated(self):
         sd = self.base / "SD Card"
         sdroot = sd / "steamapps/common/SD Game"

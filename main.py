@@ -42,6 +42,9 @@ class Plugin:
     async def game_running(self, key: str):
         return await asyncio.to_thread(self.manager.is_running, key)
 
+    async def running_games(self):
+        return await asyncio.to_thread(self.manager.running_game_ids)
+
     async def get_settings(self, key: str):
         return await asyncio.to_thread(self.manager.get_settings, key)
 

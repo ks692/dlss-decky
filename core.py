@@ -122,14 +122,23 @@ def safe_extract(data: bytes, destination: Path) -> None:
         archive.extractall(destination)
 
 
+def _vdf_paths(text: str) -> list[Path]:
+    return [Path(s.replace("\\\\", "\\").replace('\\"', '"'))
+            for s in re.findall(r'"path"\s+"((?:\\.|[^"\\])*)"', text)]
+
+
 def libraries(home: Path) -> list[Path]:
     roots = [home / p for p in (".local/share/Steam", ".steam/steam", ".steam/root", ".var/app/com.valvesoftware.Steam/.local/share/Steam")]
     result = set()
     for root in roots:
         paths = [root]
-        vdf = root / "steamapps/libraryfolders.vdf"
-        if vdf.is_file():
-            paths += [Path(s.replace("\\\\", "\\").replace('\\"', '"')) for s in re.findall(r'"path"\s+"((?:\\.|[^"\\])*)"', vdf.read_text(errors="replace"))]
+        # Steam registers libraries in either file; lsfg-vk reads both.
+        for vdf in (root / "steamapps/libraryfolders.vdf", root / "config/libraryfolders.vdf"):
+            if vdf.is_file():
+                try:
+                    paths += _vdf_paths(vdf.read_text(errors="replace"))
+                except OSError:
+                    continue
         for p in paths:
             if (p / "steamapps/common").is_dir():
                 result.add(p.resolve())
@@ -159,6 +168,21 @@ def read_tail(path: Path, lines: int = 200, max_bytes: int = 256 * 1024) -> str:
     except OSError:
         return ""
     return "\n".join(text.splitlines()[-lines:])
+
+
+def process_roots() -> set[Path]:
+    """Resolved exe/cwd of every process; one /proc walk for all games."""
+    found = set()
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        for link in ("exe", "cwd"):
+            try:
+                target = os.readlink(f"/proc/{pid}/{link}")
+            except (OSError, RuntimeError):
+                continue
+            if target:
+                with contextlib.suppress(OSError, RuntimeError):
+                    found.add(Path(target).resolve())
+    return found
 
 
 def running_processes(root: Path) -> list[str]:
@@ -221,6 +245,16 @@ class Manager:
         game = self.selected(key)
         processes = running_processes(Path(game["root"]))
         return {"running": bool(processes), "processes": processes[:5]}
+
+    def running_game_ids(self) -> list[str]:
+        """IDs of scanned games with a live process inside their directory."""
+        roots = process_roots()
+        ids = []
+        for game in self.scan():
+            root = Path(game["root"])
+            if any(p.is_relative_to(root) for p in roots):
+                ids.append(game["id"])
+        return ids
 
     def _settings_dirs(self, game: dict) -> list[Path]:
         root = Path(game["root"])
