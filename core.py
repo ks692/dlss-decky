@@ -51,18 +51,6 @@ SETTINGS_SCHEMA = (
      "help": "auto: balanced default. fast: lower internal resolution, a little softer. full: always full output size."},
 )
 
-# Top-level game-directory markers for anti-cheat products that commonly ban
-# modified or injected DLLs. Detection is best-effort and cannot cover every game.
-ANTICHEAT = {
-    "easyanticheat": "Easy Anti-Cheat",
-    "battleye": "BattlEye",
-    "xigncode3": "XIGNCODE3",
-    "nprotect": "nProtect GameGuard",
-    "gameguard": "nProtect GameGuard",
-    "vgk.sys": "Riot Vanguard",
-    "faceit.sys": "FACEIT Anti-Cheat",
-}
-
 class ManagerError(Exception):
     pass
 
@@ -171,15 +159,6 @@ def read_tail(path: Path, lines: int = 200, max_bytes: int = 256 * 1024) -> str:
     except OSError:
         return ""
     return "\n".join(text.splitlines()[-lines:])
-
-
-def detect_anticheat(root: Path) -> list[str]:
-    """Known anti-cheat products shipped at the top level of the game directory."""
-    try:
-        names = {entry.name.lower() for entry in root.iterdir()}
-    except OSError:
-        return []
-    return sorted({label for marker, label in ANTICHEAT.items() if marker in names})
 
 
 def running_processes(root: Path) -> list[str]:
@@ -443,12 +422,6 @@ class Manager:
                 raise ManagerError("Set up HelixSR first")
             root = Path(game["root"])
             self._require_closed(game, "installing HelixSR")
-            anticheat = detect_anticheat(root)
-            if anticheat:
-                raise ManagerError(
-                    "Anti-cheat detected (" + ", ".join(anticheat) + "). "
-                    "Modified DLLs risk an account ban, so installation is blocked. "
-                    "Detection cannot cover every game; check the game's policy before modding.")
             changes = {}
             for target_text in game["targets"]:
                 target = within(root, Path(target_text))

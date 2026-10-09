@@ -15,7 +15,6 @@ The UI calls Python with a discovered game ID, not arbitrary filesystem paths. T
 ## Safety checks and settings
 
 - Install and restore refuse to run while any process has its executable or working directory inside the game root (`Manager._require_closed`, via `/proc`).
-- Install is blocked when top-level game-directory names match `core.ANTICHEAT` (Easy Anti-Cheat, BattlEye, XIGNCODE3, nProtect/GameGuard, Vanguard/FACEIT drivers). Detection is best-effort.
 - Per-game `helixsr.ini` settings are managed through `Manager.get_settings` / `set_settings` against `core.SETTINGS_SCHEMA` (sharpening mode/strength, reconstruction network, network resolution). Unknown keys and sections in an existing file are preserved; the game must be installed and closed to save.
 - Diagnostics RPCs: `versions` (plugin and HelixSR versions, setup readiness), `setup_log` / `game_log` (tailed logs), `game_running` (process check for one game).
 - The install manifest records the HelixSR version used, surfaced per game as `installed_version`.

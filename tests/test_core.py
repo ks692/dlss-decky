@@ -166,18 +166,11 @@ class ManagerTests(unittest.TestCase):
         self.install()
         self.assertEqual(combined.read_bytes(), b"original combined DLL")
 
-    def test_anticheat_blocks_installation(self):
+    def test_anti_cheat_names_do_not_block_installation(self):
         (self.root / "EasyAntiCheat").mkdir()
         (self.root / "EasyAntiCheat/BEService.exe").write_bytes(b"fixture")
-        with self.assertRaisesRegex(ManagerError, "Anti-cheat detected"):
-            self.install()
-        self.assertEqual(self.target.read_bytes(), self.original)
-        self.assertFalse(self.manager.scan()[0]["installed"])
-
-    def test_anticheat_detection_is_case_insensitive(self):
-        (self.root / "BattlEye").mkdir()
-        with self.assertRaisesRegex(ManagerError, "BattlEye"):
-            self.install()
+        self.install()
+        self.assertTrue(self.manager.scan()[0]["installed"])
 
     def test_install_blocked_while_game_runs(self):
         with patch.object(core, "running_processes", return_value=["game.exe"]):

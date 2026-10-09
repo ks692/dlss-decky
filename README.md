@@ -13,7 +13,7 @@ Install and remove **HelixSR** for supported Steam games from **Decky Loader**, 
 - Detects changed files before restoring and keeps a journal for interrupted installations.
 - Optional per-game sharpening and reconstruction settings, written to the game's `helixsr.ini`.
 - Shows the installed HelixSR version, setup status, and the setup and renderer logs.
-- Requires the game to be closed before changing its files, and blocks installation when known anti-cheat software is detected.
+- Requires the game to be closed before changing its files.
 
 ## Requirements
 
@@ -52,7 +52,7 @@ The network is generated on your Deck. Setup can take several minutes, depending
 
 1. Close the game. Helix Deck also refuses to change files while the game's processes are running.
 2. Select it under **Your games**. Use **Refresh games** after installing a game or mounting a library.
-3. Select **Install HelixSR**. Installation is blocked when known anti-cheat software (such as Easy Anti-Cheat or BattlEye) is detected in the game folder, because modified DLLs risk an account ban. Detection cannot cover every game; check the game's policy before modding.
+3. Select **Install HelixSR**.
 4. Launch normally and select **AMD FSR** in the game's graphics settings.
 
 No launch options are required for this direct installation path. When a game has several eligible upscaler DLLs, the plugin manages them together. A dedicated upscaler DLL takes precedence over the combined FidelityFX DLL, following HelixSR's installer behavior.
@@ -83,15 +83,14 @@ Restore games **before removing the plugin or moving a game to another library**
 | Installation is interrupted | Reopen Helix Deck, select the managed game, and use **Restore original files** before reinstalling. |
 | Restore reports changed files | Stop and preserve the changed files. The plugin refuses to overwrite game updates or other edits. Recovery details are in [DEVELOPMENT.md](DEVELOPMENT.md#recovery-and-data). |
 | A previous mod or backup is detected | Remove that installation using its own installer before using Helix Deck. |
-| Install is blocked: anti-cheat detected | Helix Deck refuses to patch games shipping known anti-cheat software. Do not work around this; a ban is likely. |
 | Install or restore says the game is running | Close the game fully (check the process is gone) and retry. |
 | Settings will not save | The game must be closed, and HelixSR must be installed for that game first. |
 
 ## Scope
 
-V1 handles direct HelixSR installation for Steam games, with per-game sharpening and reconstruction settings, an installed-version view, setup and renderer logs, running-game detection, and blocking of known anti-cheat conflicts.
+V1 handles direct HelixSR installation for Steam games, with per-game sharpening and reconstruction settings, an installed-version view, setup and renderer logs, and running-game detection.
 
-It includes no OptiScaler integration, frame generation, non-Steam launcher support, or automatic updates. Anti-cheat detection is best-effort and cannot cover every game.
+It includes no OptiScaler integration, frame generation, non-Steam launcher support, automatic updates, or anti-cheat detection/blocking.
 
 ## Development
 
