@@ -92,3 +92,23 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await self.plugin.restore("game-id"), "restored")
         install.assert_called_once_with("game-id")
         restore.assert_called_once_with("game-id")
+
+    async def test_diagnostic_rpcs_delegate_to_manager(self):
+        with patch.object(self.plugin.manager, "versions", return_value={"plugin": "0.2.0"}) as versions, \
+             patch.object(self.plugin.manager, "setup_log_text", return_value="log tail") as setup_log, \
+             patch.object(self.plugin.manager, "game_log_text", return_value="game tail") as game_log, \
+             patch.object(self.plugin.manager, "is_running", return_value={"running": False}) as is_running:
+            self.assertEqual(await self.plugin.versions(), {"plugin": "0.2.0"})
+            self.assertEqual(await self.plugin.setup_log(50), "log tail")
+            self.assertEqual(await self.plugin.game_log("game-id", 50), "game tail")
+            self.assertEqual(await self.plugin.game_running("game-id"), {"running": False})
+        versions.assert_called_once_with()
+        setup_log.assert_called_once_with(50)
+        game_log.assert_called_once_with("game-id", 50)
+        is_running.assert_called_once_with("game-id")
+
+    async def test_log_line_count_is_clamped(self):
+        with patch.object(self.plugin.manager, "setup_log_text", return_value="") as setup_log:
+            await self.plugin.setup_log(100000)
+            await self.plugin.setup_log(0)
+        self.assertEqual([c.args[0] for c in setup_log.call_args_list], [1000, 1])
